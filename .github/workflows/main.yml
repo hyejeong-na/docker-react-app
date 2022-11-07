@@ -6,25 +6,59 @@ on:
   pull_request:
     branches: [ master ]
 
-env:
-  S3_BUCKET_NAME: react-deploy
-
 jobs:
   build:
 
     runs-on: ubuntu-latest
 
+    strategy:
+      matrix:
+        node-version: [12.x]
+        # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
+    #액션의 실행 수행내용, 단계별로 실행된다.
     steps:
-    - uses: actions/checkout@v2
-    
-    - name: Set up JDK 8
-      uses: actions/setup-java@v2
-      with:
-        java-version: '8'
-        distribution: 'temurin'
-        
-    - name: Grant execute permission for gradlew
-      run: chmod +x gradlew
-    
-    - name: Build with Gradle
-      run: ./gradlew clean build
+      - name: Checkout source code.
+        uses: actions/checkout@v2
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v2
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      # - name: delete package-lock.json
+      #   run: rm package-lock.json
+
+      - name: Install dependencies
+        run: npm install
+
+      # - name: build file
+      #   run: npm run build
+
+      - name: create env file
+        working-directory: ./server
+        run: 
+          touch .env
+          cat << EOF >> .env
+          ${{ secrets.ENV }}
+          EOF
+          
+      - name: zip distributions
+        run: zip -r together-zip.zip ./client/dist ./server ./appspec.yml ./scripts
+
+      - name: AWS configure credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-2
+          
+      #s3,codeDeploy 경로와 이름 알맞게 입력
+      - name: upload to S3
+        run: aws s3 cp --region ap-northeast-2 ./together-zip.zip s3://reactnhj-deploy/public/
+
+      - name: deploy with AWS codeDeploy
+        run: aws deploy create-deployment
+          --application-name docker-react-app
+          --deployment-config-name CodeDeployDefault.OneAtATime
+          --deployment-group-name docker-react-app
+          --s3-location bucket=reactnhj-deploy,bundleType=zip,key=public/together-zip.zip
